@@ -8,6 +8,8 @@
 
   const CONTEXT_TTL = 10 * 60 * 1000;
   const MAX_LYRIC_LENGTH = 2 * 1024 * 1024;
+  const SONG_MODULE_PATH = /^\/assets\/(?:stores|mainWindow)-[\w-]+\.js$/;
+  const REQUEST_OPTIONS = { timeout: 15000, skipErrorMessage: true };
   const functionSource = (value) => Function.prototype.toString.call(value);
 
   function walkComponents(root, visit) {
@@ -30,7 +32,7 @@
   function findLyricRequest(exports) {
     const functions = Object.values(exports).filter((value) => typeof value === "function");
     const direct = functions.find((fn) => /url\s*:\s*["']\/v1\/song\/lyric["']/.test(functionSource(fn)));
-    if (direct) return (id, platform) => direct(id, platform);
+    if (direct) return (id, platform) => direct(id, platform, { ...REQUEST_OPTIONS });
 
     // 只定位携带已知歌曲接口地址的实际客户端调用，不要求它位于箭头函数最外层。
     // 网站可能先 await 请求，再对结果做额外处理；不调用歌曲 URL 函数本身。
@@ -49,8 +51,7 @@
       url: "/v1/song/lyric",
       method: "GET",
       params: { id, platform },
-      timeout: 15000,
-      skipErrorMessage: true,
+      ...REQUEST_OPTIONS,
     });
   }
 
@@ -84,19 +85,29 @@
       if (!modulePromise) {
         modulePromise = (async () => {
           const urls = [
-            ...Array.from(document.querySelectorAll('link[rel="modulepreload"]'), (node) => node.href),
+            ...Array.from(document.querySelectorAll('link[rel="modulepreload"], script[type="module"][src]'), (node) => node.href || node.src),
             ...performance.getEntriesByType("resource").map((entry) => entry.name),
           ];
-          const url = urls.reverse().find((value) => {
+          const candidates = new Set();
+          for (const value of urls.reverse()) {
+            if (!value) continue;
             try {
-              const parsed = new URL(value, origin);
-              return parsed.origin === origin && /^\/assets\/stores-[\w-]+\.js$/.test(parsed.pathname);
-            } catch {
-              return false;
-            }
-          });
-          if (!url) throw new Error("未找到网站的歌曲模块，请刷新网页后重试");
-          return loadModule(new URL(url, origin).href);
+              const url = new URL(value, origin);
+              if (url.origin === origin && SONG_MODULE_PATH.test(url.pathname)) candidates.add(url.href);
+            } catch { /* 忽略无效资源地址。 */ }
+          }
+          if (!candidates.size) throw new Error("未找到网站的歌曲模块，请刷新网页后重试");
+
+          // 同时兼容旧版 store 和新版主窗口模块，只采用能定位歌词请求的导出。
+          let loaded = false;
+          for (const url of candidates) {
+            let exports;
+            try { exports = await loadModule(url); } catch { continue; }
+            loaded = true;
+            try { return { exports, requestLyrics: findLyricRequest(exports) }; } catch { /* 尝试下一个候选模块。 */ }
+          }
+          if (loaded) throw new Error("无法识别网站的歌词请求函数，请更新插件后重试");
+          throw new Error("网站的歌曲模块加载失败，请刷新网页后重试");
         })().catch((error) => {
           modulePromise = undefined;
           throw error;
@@ -149,14 +160,14 @@
     return {
       async getContext(token) {
         const captured = capture(token);
-        return describe(captured, await siteModule());
+        const { exports } = await siteModule();
+        return describe(captured, exports);
       },
       async getLyrics(token) {
         // 在异步请求前保存歌曲对象，避免原站下载成功、关闭弹窗后丢失目标歌曲。
         const captured = capture(token);
-        const exports = await siteModule();
+        const { exports, requestLyrics } = await siteModule();
         const context = describe(captured, exports);
-        const requestLyrics = findLyricRequest(exports);
         let response;
         try {
           response = await requestLyrics(context.songId, context.platform);
