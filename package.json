@@ -1,7 +1,7 @@
 {
   "name": "he-music-lyrics-extension",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "HE-Music 歌词下载 Chrome 扩展",
   "scripts": {
     "test": "node --test tests/*.test.cjs",

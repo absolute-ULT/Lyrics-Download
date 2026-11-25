@@ -85,6 +85,27 @@
     }
   }
 
+  async function saveFile(file, filenameBase, saveAs) {
+    if (saveAs) {
+      return chrome.runtime.sendMessage({ type: "he-lyrics:download", filenameBase,
+        extension: file.extension, text: file.text, saveAs: true });
+    }
+    if (!file.text.trim() || file.text.length > 2 * 1024 * 1024) throw new Error("歌词文件内容无效或过大");
+    const filename = `${HELyrics.sanitizeFilenameBase(filenameBase)}.${file.extension}`;
+    const mime = file.extension === "lrc" ? "application/x-lrc" : "text/plain";
+    const url = URL.createObjectURL(new Blob(["﻿", file.text.replace(/^﻿/, "")], { type: `${mime};charset=utf-8` }));
+    try {
+      // 下载链接直接携带歌名；部分 Chrome 下载环境会忽略扩展对 data: URL 的命名建议。
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      return await chrome.runtime.sendMessage({ type: "he-lyrics:verify", url, filenameBase, extension: file.extension });
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+  }
+
   async function startDownload(state, automatic) {
     if (state.busy) return;
     state.busy = true;
@@ -102,13 +123,7 @@
     try {
       const { context, lyrics } = await request("get-lyrics", state.token);
       const file = HELyrics.buildLyricFile(lyrics, { ...options, ...context });
-      const response = await chrome.runtime.sendMessage({
-        type: "he-lyrics:download",
-        filenameBase: context.filenameBase,
-        extension: file.extension,
-        text: file.text,
-        saveAs: options.saveAs,
-      });
+      const response = await saveFile(file, context.filenameBase, options.saveAs);
       if (!response?.ok) throw new Error(response?.error || "无法启动歌词下载");
       const fallback = options.format === "lrc" && file.extension === "txt" ? "（无时间戳，改用 TXT）" : "";
       const prefix = response.verification === "complete" ? "歌词已保存" :
@@ -147,7 +162,7 @@
     section.setAttribute("aria-label", "歌词下载选项");
     const heading = element("div", "he-lyrics-heading");
     const enabled = checkbox("同时下载歌词", "he-lyrics-main-check");
-    heading.append(enabled.label, element("span", "he-lyrics-badge", "歌词助手 v1.0.3"));
+    heading.append(enabled.label, element("span", "he-lyrics-badge", "歌词助手 v1.0.5"));
     const description = element("p", "he-lyrics-description", "歌词单独保存，不改动原站音频下载流程。");
     const controls = element("div", "he-lyrics-controls");
     const formatLabel = element("label", "he-lyrics-format", "格式");

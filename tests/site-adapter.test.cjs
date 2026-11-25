@@ -168,6 +168,20 @@ test("遍历 Vue Teleport、Suspense 和循环结构时不会无限递归", () =
   assert.equal(walkComponents(root, () => false), null);
 });
 
+test("歌曲模块拆分时跳过无歌词接口的 store，复用同源主窗口模块", async () => {
+  const f = fixture();
+  const origin = "https://y.hmusic.top";
+  const loaded = [];
+  const adapter = createAdapter({
+    document: { querySelector: s => s === "#app" ? f.app : f.modal,
+      querySelectorAll: () => [{ src: origin + "/assets/mainWindow-current.js" }] },
+    performance: { getEntriesByType: () => [{ name: origin + "/assets/stores-current.js" }] },
+    origin, loadModule: async url => { loaded.push(url); return url.includes("/stores-") ? {} : f.exports; },
+  });
+  assert.equal((await adapter.getLyrics("test-token")).lyrics.lyric, "[00:01.000]歌词");
+  assert.deepEqual(loaded, [origin + "/assets/stores-current.js", origin + "/assets/mainWindow-current.js"]);
+});
+
 test("找不到同源歌曲模块时明确报错", async () => {
   const f = fixture();
   const adapter = createAdapter({

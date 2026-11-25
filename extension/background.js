@@ -115,9 +115,28 @@ async function downloadLyrics(message, sender) {
   return { downloadId, ...await verifyDownload(downloadId, filename, message.saveAs === true) };
 }
 
+async function verifyPageDownload(message, sender) {
+  if (!trustedSender(sender) || typeof message.url !== "string" ||
+      !/^blob:https:\/\/y\.hmusic\.top\/[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(message.url) ||
+      typeof message.filenameBase !== "string" || !["txt", "lrc"].includes(message.extension)) {
+    throw new Error("歌词下载标识无效");
+  }
+  const filename = `${HELyrics.sanitizeFilenameBase(message.filenameBase)}.${message.extension}`;
+  // click() 返回时 Chrome 可能还没创建下载记录。只查询本次唯一的 Blob URL。
+  for (const delay of [0, 100, 250, 500, 1000, 2000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    let item;
+    try { [item] = await chrome.downloads.search({ url: message.url, limit: 1 }); }
+    catch { return { filename, verification: "unavailable" }; }
+    if (item) return verifyDownload(item.id, filename);
+  }
+  throw new Error("未找到这次歌词的下载记录，请检查浏览器是否拦截下载后重试");
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "he-lyrics:download") return false;
-  downloadLyrics(message, sender).then(
+  if (!["he-lyrics:download", "he-lyrics:verify"].includes(message?.type)) return false;
+  const action = message.type === "he-lyrics:verify" ? verifyPageDownload : downloadLyrics;
+  action(message, sender).then(
     (result) => sendResponse({ ok: true, ...result }),
     (error) => sendResponse({ ok: false, error: /cancel/i.test(error.message) ? "已取消歌词下载" :
       error.message || "无法下载歌词，请刷新网页后重试" }),

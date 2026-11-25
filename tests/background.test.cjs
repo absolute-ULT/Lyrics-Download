@@ -23,8 +23,13 @@ function setup(download = async () => 123, settings = {}) {
           addListener: (value) => changeListeners.add(value),
           removeListener: (value) => changeListeners.delete(value),
         },
-        search: async ({ id }) => {
+        search: async ({ id, url }) => {
           if (settings.searchError) throw new Error("无法查询下载记录");
+          if (url && settings.pageItem?.url === url) {
+            const item = settings.pageItem;
+            items.set(item.id, item);
+            return [item];
+          }
           return items.has(id) ? [items.get(id)] : [];
         },
         download: async (options) => {
@@ -58,6 +63,26 @@ function setup(download = async () => 123, settings = {}) {
     }),
   };
 }
+
+const blobURL = "blob:https://y.hmusic.top/b6b6e425-f213-49b1-a64e-64a65ee64ac1";
+
+test("复核具名下载，仅使用该歌词的唯一 URL，不再启动第二次下载", async () => {
+  const f = setup(undefined, { pageItem: { id: 9, state: "complete", url: blobURL, filename: "歌曲 - 歌手 (1).lrc" } });
+  const check = { ...f.message, type: "he-lyrics:verify", url: blobURL };
+  assert.equal((await f.send(check)).filename, "歌曲 - 歌手 (1).lrc");
+  for (const url of ["https://example.org", blobURL.replace("y.hmusic.top", "example.org"), blobURL + "?x"]) {
+    assert.equal((await f.send({ ...check, url })).ok, false);
+  }
+  assert.equal((await f.send(check, { ...f.sender, frameId: 1 })).ok, false);
+  assert.equal(f.calls.length, 0);
+});
+
+test("浏览器拦截具名下载时报告未找到记录", async () => {
+  const f = setup(undefined, { timeoutDelay: 1 });
+  const result = await f.send({ ...f.message, type: "he-lyrics:verify", url: blobURL });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /未找到这次歌词的下载记录/);
+});
 
 function downloadBody(url) {
   return decodeURIComponent(url.slice(url.indexOf(",") + 1));
